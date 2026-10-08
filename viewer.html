@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>DICOM Viewer</title>
+<style>
+:root{--bg:#0b0d10;--panel:#14171c;--line:#252a32;--text:#e7e9ec;--muted:#8b929c;--accent:#4aa3ff}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--text);font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;display:flex;flex-direction:column;overflow:hidden}
+.top{display:flex;align-items:center;gap:10px;padding:8px 12px;border-bottom:1px solid var(--line);background:var(--panel)}
+.top a{color:var(--muted);text-decoration:none;font-size:13px}
+.top a:hover{color:var(--text)}
+.top .title{font-weight:600}
+.top .info{color:var(--muted);font-size:13px;margin-left:auto;text-align:right}
+.wrap{flex:1;display:flex;min-height:0}
+.side{width:150px;overflow-y:auto;border-right:1px solid var(--line);background:var(--panel);padding:8px;display:flex;flex-direction:column;gap:8px}
+.thumb{border:2px solid transparent;border-radius:8px;overflow:hidden;cursor:pointer;background:#000;position:relative;flex:none}
+.thumb img{display:block;width:100%;aspect-ratio:1/1}
+.thumb span{position:absolute;left:4px;bottom:3px;font-size:11px;background:rgba(0,0,0,.65);padding:1px 5px;border-radius:4px}
+.thumb.on{border-color:var(--accent)}
+.stage{flex:1;position:relative;overflow:hidden;touch-action:none;cursor:crosshair}
+.stage.pan{cursor:grab}
+canvas{position:absolute;left:50%;top:50%;transform-origin:center;background:#000}
+.ov{position:absolute;color:#cfd3d8;font-size:12px;text-shadow:0 0 3px #000;pointer-events:none;line-height:1.5}
+.ov.tl{left:10px;top:8px}.ov.tr{right:10px;top:8px;text-align:right}.ov.bl{left:10px;bottom:8px}
+.load{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:10px;background:rgba(11,13,16,.85);font-size:13px;color:var(--muted)}
+.prog{width:200px;height:4px;background:var(--line);border-radius:2px;overflow:hidden}
+.prog i{display:block;height:100%;width:0;background:var(--accent)}
+.ctrl{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:8px 12px;border-top:1px solid var(--line);background:var(--panel)}
+.ctrl button,.ctrl select{background:#1c2027;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:7px 11px;font:inherit;cursor:pointer;min-width:38px}
+.ctrl button:hover{border-color:var(--accent)}
+.ctrl button.on{background:var(--accent);color:#04121f;border-color:var(--accent)}
+.ctrl input[type=range]{flex:1;min-width:140px;accent-color:var(--accent)}
+.fr{color:var(--muted);font-variant-numeric:tabular-nums;min-width:64px;text-align:center}
+.grp{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.hint{color:var(--muted);font-size:12px;width:100%}
+@media (max-width:700px){
+  .wrap{flex-direction:column-reverse}
+  .side{width:auto;flex-direction:row;overflow-x:auto;overflow-y:hidden;border-right:0;border-top:1px solid var(--line)}
+  .thumb{width:72px}
+  .top .info{display:none}
+  .ctrl input[type=range]{order:-1;flex-basis:100%}
+  .ctrl{gap:6px;padding:8px 10px}
+  .ctrl button,.ctrl select{padding:7px 9px}
+  .hint{display:none}
+}
+</style>
+</head>
+<body>
+<div class="top">
+  <a href="./">&larr; All runs</a>
+  <span class="title" id="ttl">DICOM Viewer</span>
+  <span class="info" id="info"></span>
+</div>
+<div class="wrap">
+  <div class="side" id="side"></div>
+  <div class="stage" id="stage">
+    <canvas id="cv"></canvas>
+    <div class="ov tl" id="ovtl"></div>
+    <div class="ov tr" id="ovtr"></div>
+    <div class="ov bl" id="ovbl"></div>
+    <div class="load" id="load"><div id="ltxt">Loading…</div><div class="prog"><i id="lbar"></i></div></div>
+  </div>
+</div>
+<div class="ctrl">
+  <div class="grp">
+    <button id="prev" title="Previous frame (←)">&#9664;&#9664;</button>
+    <button id="play" title="Play / pause (Space)">&#9654;</button>
+    <button id="next" title="Next frame (→)">&#9654;&#9654;</button>
+  </div>
+  <input type="range" id="slider" min="0" max="0" value="0">
+  <span class="fr" id="fr">0 / 0</span>
+  <div class="grp">
+    <select id="speed" title="Playback speed">
+      <option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option>
+    </select>
+    <button id="mode" title="Drag mode">Drag: Contrast</button>
+    <button id="zin" title="Zoom in">+</button>
+    <button id="zout" title="Zoom out">&minus;</button>
+    <button id="inv" title="Invert">Invert</button>
+    <button id="reset" title="Reset view">Reset</button>
+    <a id="dl" download><button>Download</button></a>
+  </div>
+  <div class="hint">Drag on image: left/right = contrast, up/down = brightness (switch to Pan to move a zoomed image). Mouse wheel zooms. Keys: Space, ← →.</div>
+</div>
+<script>
+const $=id=>document.getElementById(id);
+const cv=$("cv"),ctx=cv.getContext("2d"),stage=$("stage");
+let M,run,ri=0,px=null,frame=0,playing=false,timer=null,speed=1;
+let wc=127.5,ww=255,inv=false,zoom=1,panX=0,panY=0,dragMode="wl";
+const cache=new Map();let img=null;
+
+function fmtDate(s){if(!s||s.length!==8)return s;const m=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];return `${+s.slice(6)} ${m[+s.slice(4,6)-1]} ${s.slice(0,4)}`}
+
+async function fetchRun(r){
+  if(cache.has(r.id))return cache.get(r.id);
+  $("load").style.display="flex";$("lbar").style.width="0";
+  const res=await fetch(`dicom/${r.id}.dcm`);
+  const total=+res.headers.get("content-length")||r.size;
+  if(!res.ok)throw new Error("HTTP "+res.status);
+  const reader=res.body.getReader();const chunks=[];let got=0;
+  for(;;){const {done,value}=await reader.read();if(done)break;
+    chunks.push(value);got+=value.length;
+    $("lbar").style.width=Math.min(100,got/total*100)+"%";
+    $("ltxt").textContent=`Loading run ${ri+1}… ${(got/1048576).toFixed(1)} / ${(total/1048576).toFixed(1)} MB`;}
+  const buf=new Uint8Array(got);let o=0;for(const c of chunks){buf.set(c,o);o+=c.length;}
+  // verify DICOM magic
+  const magic=String.fromCharCode(buf[128],buf[129],buf[130],buf[131]);
+  if(magic!=="DICM")throw new Error("Not a DICOM file");
+  const pix=buf.subarray(r.offset,r.offset+r.rows*r.cols*r.frames);
+  if(cache.size>=3)cache.delete(cache.keys().next().value);
+  cache.set(r.id,pix);return pix;
+}
+
+function lut(){const t=new Uint8ClampedArray(256);const lo=wc-ww/2;
+  for(let i=0;i<256;i++){let v=(i-lo)/ww*255;v=Math.max(0,Math.min(255,v));t[i]=inv?255-v:v;}return t;}
+
+function draw(){
+  if(!px)return;const n=run.rows*run.cols,o=frame*n,t=lut(),d=img.data;
+  for(let i=0,j=0;i<n;i++,j+=4){const v=t[px[o+i]];d[j]=d[j+1]=d[j+2]=v;d[j+3]=255;}
+  ctx.putImageData(img,0,0);
+  $("slider").value=frame;$("fr").textContent=`${frame+1} / ${run.frames}`;
+  $("ovbl").textContent=`W ${Math.round(ww)} / L ${Math.round(wc)}  ·  Zoom ${Math.round(zoom*100)}%`;
+}
+
+function fit(){
+  const s=Math.min(stage.clientWidth,stage.clientHeight)/run.cols;
+  cv.style.width=run.cols*s+"px";cv.style.height=run.rows*s+"px";
+  cv.style.transform=`translate(-50%,-50%) translate(${panX}px,${panY}px) scale(${zoom})`;
+}
+
+function setPlay(p){playing=p;$("play").innerHTML=p?"&#10074;&#10074;":"&#9654;";clearInterval(timer);
+  if(p)timer=setInterval(()=>{frame=(frame+1)%run.frames;draw();},1000/(run.fps*speed));}
+
+async function openRun(i){
+  setPlay(false);ri=i;run=M.runs[i];
+  document.querySelectorAll(".thumb").forEach((t,k)=>t.classList.toggle("on",k===i));
+  $("ttl").textContent=`Run ${i+1}`;
+  $("ovtl").innerHTML=`Run ${i+1} · Series ${run.series}<br>${run.view}`;
+  $("ovtr").innerHTML=`${fmtDate(M.date)}<br>${run.time} · ${run.fps} fps`;
+  $("dl").href=`dicom/${run.id}.dcm`;
+  history.replaceState(null,"",`?run=${i+1}`);
+  cv.width=run.cols;cv.height=run.rows;img=ctx.createImageData(run.cols,run.rows);
+  px=null;
+  try{px=await fetchRun(run);}catch(e){$("ltxt").textContent="Could not load this run: "+e.message;return;}
+  if(run!==M.runs[i])return;
+  $("load").style.display="none";
+  wc=run.wc;ww=run.ww;frame=0;$("slider").max=run.frames-1;fit();draw();setPlay(true);
+}
+
+fetch("manifest.json").then(r=>r.json()).then(m=>{
+  M=m;$("info").textContent=`${m.study} · ${fmtDate(m.date)}`;
+  const side=$("side");
+  m.runs.forEach((r,i)=>{const d=document.createElement("div");d.className="thumb";
+    d.innerHTML=`<img src="poster/${r.id}.jpg" alt="Run ${i+1}"><span>Run ${i+1}</span>`;d.onclick=()=>openRun(i);side.appendChild(d);});
+  const q=+new URLSearchParams(location.search).get("run");
+  openRun(q>=1&&q<=m.runs.length?q-1:0);
+});
+
+$("play").onclick=()=>setPlay(!playing);
+$("prev").onclick=()=>{setPlay(false);frame=(frame-1+run.frames)%run.frames;draw();};
+$("next").onclick=()=>{setPlay(false);frame=(frame+1)%run.frames;draw();};
+$("slider").oninput=e=>{setPlay(false);frame=+e.target.value;draw();};
+$("speed").onchange=e=>{speed=+e.target.value;if(playing)setPlay(true);};
+$("inv").onclick=()=>{inv=!inv;$("inv").classList.toggle("on",inv);draw();};
+$("mode").onclick=()=>{dragMode=dragMode==="wl"?"pan":"wl";$("mode").textContent=dragMode==="wl"?"Drag: Contrast":"Drag: Pan";stage.classList.toggle("pan",dragMode==="pan");};
+function setZoom(z){zoom=Math.max(1,Math.min(6,z));if(zoom===1){panX=panY=0;}fit();draw();}
+$("zin").onclick=()=>setZoom(zoom*1.25);$("zout").onclick=()=>setZoom(zoom/1.25);
+$("reset").onclick=()=>{wc=run.wc;ww=run.ww;inv=false;$("inv").classList.remove("on");zoom=1;panX=panY=0;fit();draw();};
+stage.addEventListener("wheel",e=>{e.preventDefault();setZoom(zoom*(e.deltaY<0?1.1:1/1.1));},{passive:false});
+stage.addEventListener("dblclick",()=>$("reset").click());
+
+let drag=null;const pts=new Map();
+stage.addEventListener("pointerdown",e=>{stage.setPointerCapture(e.pointerId);pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(pts.size===2){const [a,b]=[...pts.values()];drag={pinch:Math.hypot(a.x-b.x,a.y-b.y),z:zoom};}
+  else drag={x:e.clientX,y:e.clientY,wc,ww,px:panX,py:panY};});
+stage.addEventListener("pointermove",e=>{if(!drag||!pts.has(e.pointerId))return;pts.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(drag.pinch){if(pts.size<2)return;const [a,b]=[...pts.values()];setZoom(drag.z*Math.hypot(a.x-b.x,a.y-b.y)/drag.pinch);return;}
+  const dx=e.clientX-drag.x,dy=e.clientY-drag.y;
+  if(dragMode==="pan"){panX=drag.px+dx;panY=drag.py+dy;fit();}
+  else{ww=Math.max(1,drag.ww+dx*1.5);wc=drag.wc-dy*1.0;draw();}});
+function up(e){pts.delete(e.pointerId);if(pts.size===0)drag=null;}
+stage.addEventListener("pointerup",up);stage.addEventListener("pointercancel",up);
+window.addEventListener("resize",()=>{if(run)fit();});
+document.addEventListener("keydown",e=>{if(!run)return;
+  if(e.code==="Space"){e.preventDefault();setPlay(!playing);}
+  else if(e.key==="ArrowRight")$("next").click();else if(e.key==="ArrowLeft")$("prev").click();
+  else if(e.key==="ArrowDown")openRun((ri+1)%M.runs.length);else if(e.key==="ArrowUp")openRun((ri-1+M.runs.length)%M.runs.length);});
+</script>
+</body>
+</html>
